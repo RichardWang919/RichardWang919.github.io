@@ -1,0 +1,175 @@
+<!-- 
+Author : ChungYi Fu (Kaohsiung, Taiwan)   2020/9/13 21:90
+https://www.facebook.com/francefu
+
+Try it!
+https://fustyles.github.io/webduino/TensorFlow/HandPoseDetection_video/handpose_video.html
+-->
+<!DOCTYPE html>
+<head>
+  <title>Handpose Detection</title>
+  <meta charset="utf-8">
+  <meta name="robots" content="noindex">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.1.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+</head>
+<body>
+<button onclick="location.href=location.pathname;">Front Camera</button>&nbsp;&nbsp;<button onclick="location.href='?back';">Rear Camera</button><br>
+<video id="video" width="320" height="240" preload autoplay loop muted></video>
+<canvas id="canvas"></canvas>
+<br>
+<div id="result" style="color:red"></div>
+  
+<script>
+  let fingerLookupIndices = {
+	  thumb: [0, 1, 2, 3, 4],
+	  indexFinger: [0, 5, 6, 7, 8],
+	  middleFinger: [0, 9, 10, 11, 12],
+	  ringFinger: [0, 13, 14, 15, 16],
+	  pinky: [0, 17, 18, 19, 20]
+  };
+  
+  var video = document.getElementById('video');
+  var canvas = document.getElementById('canvas'); 
+  var context = canvas.getContext('2d');
+  var result = document.getElementById('result');
+  let Model; 
+  var lastValue = -1;
+  
+  window.onload = function() {LoadModel();}
+  function LoadModel() {
+	result.innerHTML = "Please wait for loading model.";
+    handpose.load().then(function(model) {
+		Model = model;
+		result.innerHTML = "";
+		startVideo();
+    });
+  }
+  
+  function startVideo() {
+	if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+	  console.log("enumerateDevices() not supported.");
+	  return;
+	}
+
+	var videoWidth = 320;
+	var videoHeight = 240;
+	
+    var back = {audio: false,video: {facingMode: 'user',width: videoWidth,height: videoHeight}};
+	navigator.mediaDevices.enumerateDevices()
+		.then(function(devices) {
+		  devices.forEach(function(device) {
+			  if (device.kind=="videoinput"&&device.label.includes("facing back")) {
+				if (device.deviceId=='')
+					back = {audio: false,video: {facingMode: 'environment',width: videoWidth,height: videoHeight} };
+				else
+					back = {audio: false,video: {deviceId: {'exact':device.deviceId}, facingMode: 'environment',width: videoWidth,height: videoHeight} };
+			  }
+		  });
+		
+		
+		if (location.search.toLowerCase().indexOf("?back")!=-1)
+		  var userMedia = back;
+		else
+		  var userMedia = {audio: false,video: {facingMode: 'user',width: videoWidth,height: videoHeight}};
+
+		video.style.visibility="hidden";
+		video.style.position="absolute";
+		navigator.mediaDevices
+		  .getUserMedia(userMedia)
+		  .then(stream => {
+			video.srcObject = stream
+			video.onloadedmetadata = () => {       
+			  video.play();
+			  canvas.setAttribute("width", video.width);
+			  canvas.setAttribute("height", video.height);          
+			  setTimeout(function(){DetectVideo(); }, 100);
+			}
+		 })  
+	})  
+  }
+  
+  async function DetectVideo() {
+    context.translate((canvas.width + video.width) / 2, 0);
+    context.scale(-1, 1);
+    context.drawImage(video, 0, 0, video.width, video.height);
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    
+    await Model.estimateHands(canvas).then(predictions => {
+      result.innerHTML = "";
+
+		if (predictions.length > 0) {
+			for (let i = 0; i < predictions.length; i++) {
+			  const keypoints = predictions[i].landmarks;
+			  const boundingBox = predictions[i].boundingBox;
+			  const handInViewConfidence = predictions[i].handInViewConfidence;
+				
+			  var part="";
+			  for (let i = 0; i < keypoints.length; i++) {
+				if (i==0) part="wrist";
+				if (i>=1&&i<=4) part="thumb";
+				if (i>=5&&i<=8) part="indexFinger";
+				if (i>=9&&i<=12) part="middleFinger";
+				if (i>=13&&i<=16) part="ringFinger";
+				if (i>=17&&i<=20) part="pinky";
+				result.innerHTML += i+","+part+","+keypoints[i][0]+","+keypoints[i][1]+","+keypoints[i][2]+","+boundingBox.topLeft[0]+","+boundingBox.topLeft[1]+","+boundingBox.bottomRight[0]+","+boundingBox.bottomRight[1]+","+handInViewConfidence+"<br>";
+			  }
+			}
+
+		  const res = predictions[0].landmarks;
+		  drawKeypoints(context, res, predictions[0].annotations);
+		}
+
+      setTimeout(function(){DetectVideo(); }, 100);
+    });
+  }
+
+function drawPoint(ctx, y, x, r) {
+  ctx.beginPath();
+  ctx.fillStyle = "red";
+  ctx.arc(x, y, r, 0, 2 * Math.PI);
+  ctx.fill();
+}
+
+function drawKeypoints(ctx, keypoints) {
+  const keypointsArray = keypoints;
+  for (let i = 0; i < keypointsArray.length; i++) {
+    const y = keypointsArray[i][0];
+    const x = keypointsArray[i][1];
+    drawPoint(ctx, x - 2, y - 2, 3);
+  }
+
+  const fingers = Object.keys(fingerLookupIndices);
+  for (let i = 0; i < fingers.length; i++) {
+    const finger = fingers[i];
+    const points = fingerLookupIndices[finger].map(idx => keypoints[idx]);
+    drawPath(ctx, points, false);
+  }
+}
+
+function drawPath(ctx, points, closePath) {
+  if (lastValue==-1||lastValue!=points[0][0]) {
+    ctx.strokeStyle = "#2828FF";
+  } else {
+    ctx.strokeStyle = "#00DB00";
+  }
+
+  const region = new Path2D();
+  region.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) {
+    const point = points[i];
+    region.lineTo(point[0], point[1]);
+  }
+
+  lastValue=points[0][0];
+
+  if (closePath) {
+    region.closePath();
+  }
+  ctx.stroke(region);
+}
+</script>
+
+</body>
+</html>
