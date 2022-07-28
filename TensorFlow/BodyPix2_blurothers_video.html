@@ -1,0 +1,225 @@
+<!-- 
+Author : ChungYi Fu (Kaohsiung, Taiwan)   2020/12/5 10:00
+https://www.facebook.com/francefu
+Try it!
+https://fustyles.github.io/webduino/TensorFlow/BodyPix_video/BodyPix2_blurothers_video.html
+-->
+
+<!DOCTYPE html>
+<head>
+  <title>Person and body part partSegmentation (BodyPix)</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7/dist/tf.min.js"> </script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.0"> </script> 
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet"> </script>  
+</head>
+<body>
+<button onclick="location.href=location.pathname;">Front Camera</button>&nbsp;&nbsp;<button onclick="location.href='?back';">Rear Camera</button>
+<video id="video" width="320" height="240"  style="display:none" preload autoplay loop muted></video>
+<br>
+<canvas id="canvas"></canvas>
+<br>
+Object<select id="kind"><option value="0">Unblur first face</option><option value="1" selected>Unblur max area of face(Closest to the lens)</option><option value="2">Blur all faces</option></select>
+<br>
+Background Blur Amount<select id="backgroundbluramount"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option></select>
+<br>
+Max Detections<select id="maxdetections"><option value="5">5</option><option value="10" selected>10</option><option value="15">15</option><option value="20">20</option><option value="25">25</option><option value="30">30</option></select>
+<br>
+<input type="checkbox" id="mirror">Mirror
+<div id="result" style="color:red"></div><br>
+
+<script>
+	var video = document.getElementById('video');
+	var canvas = document.getElementById('canvas');
+	var context = canvas.getContext('2d');
+	var kind = document.getElementById('kind');
+	var maxdetections = document.getElementById('maxdetections'); 
+	var backgroundbluramount = document.getElementById('backgroundbluramount');
+	var mirror = document.getElementById('mirror');
+	let Model;
+	var videoWidth = 320;
+	var videoHeight = 240;	
+
+	window.onload = function() { LoadModel();} 
+	
+	function LoadModel() {
+		result.innerHTML = "Please wait for loading model.";
+		bodyPix.load().then(function(model) {
+			Model = model;
+			result.innerHTML = ""; 
+			startVideo();
+		}); 
+	}
+
+	function startVideo() {
+		if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+			console.log("enumerateDevices() not supported.");
+			return;
+		}
+
+		var back = {audio: false,video: {facingMode: 'user',width: videoWidth,height: videoHeight}};
+		navigator.mediaDevices.enumerateDevices()
+			.then(function(devices) {
+				devices.forEach(function(device) {
+					if (device.kind=="videoinput"&&device.label.includes("facing back")) {
+						if (device.deviceId=='')
+							back = {audio: false,video: {facingMode: 'environment',width: videoWidth,height: videoHeight} };
+						else
+							back = {audio: false,video: {deviceId: {'exact':device.deviceId}, facingMode: 'environment',width: videoWidth,height: videoHeight} };
+					}
+				});
+
+
+			if (location.search.toLowerCase().indexOf("?back")!=-1) {
+				var userMedia = back;
+				mirror.checked = false;
+			}
+			else
+				var userMedia = {audio: false,video: {facingMode: 'user',width: videoWidth,height: videoHeight}};
+
+			navigator.mediaDevices
+			.getUserMedia(userMedia)
+			.then(stream => {
+				video.srcObject = stream
+				video.onloadedmetadata = () => {       
+					video.play();
+					canvas.setAttribute("width", video.width);
+					canvas.setAttribute("height", video.height);   
+					setTimeout(function(){DetectVideo(); }, 100);
+				}
+			})  
+		})  
+	}  
+
+	async function DetectVideo() {
+		await Model.segmentMultiPersonParts(video, {
+			flipHorizontal: Number(mirror.checked),
+			internalResolution: 'medium',
+			segmentationThreshold: 0.7,
+			maxDetections: Number(maxdetections.value),
+			scoreThreshold: 0.2,
+			nmsRadius: 30,
+			minKeypointScore: 0.3,
+			refineSteps: 10
+		}).then(partSegmentation => {
+		
+			if (partSegmentation.length>0) {
+				if (kind.value == "0") {
+					for (var i=0;i<partSegmentation[0].data.length;i++)
+						partSegmentation[0].data[i] = -1;
+				} else if (kind.value == "1") {
+					var maxIndex = 0;
+					var maxCount = 0;
+					var Count = 0;
+					for (var i=0;i<partSegmentation.length;i++) {
+						Count = 0;
+						for (var j=0;j<partSegmentation[i].data.length;j++) {
+							if (partSegmentation[i].data[j]!=-1)
+								Count++;
+						}
+						if (Count>=maxCount) {
+							maxCount=Count;
+							maxIndex=i;
+						}
+					}
+					for (var k=0;k<partSegmentation[maxIndex].data.length;k++)
+						partSegmentation[maxIndex].data[k] = -1;
+				}
+				
+				const faceBodyPartIdsToBlur = [0, 1];
+				const backgroundBlurAmount = Number(backgroundbluramount.value);
+				const edgeBlurAmount = 3;
+				const flipHorizontal = Number(mirror.checked);
+
+				bodyPix.blurBodyPart(canvas, video, partSegmentation, faceBodyPartIdsToBlur, backgroundBlurAmount, edgeBlurAmount, flipHorizontal);
+				//drawPoses(partSegmentation, flipHorizontal, context3);				
+			} 
+			else {
+				if (mirror.checked) {
+					context.translate((canvas.width + video.width) / 2, 0);
+					context.scale(-1, 1);
+					context.drawImage(video, 0, 0, video.width, video.height);
+					context.setTransform(1, 0, 0, 1, 0, 0);
+				}
+				else
+					context.drawImage(video, 0, 0, video.width, video.height);
+			}
+
+			setTimeout(function(){DetectVideo(); }, 100);
+		});
+	}
+
+	const COLOR = 'aqua';
+	const BOUNDING_BOX_COLOR = 'red';
+	const LINE_WIDTH = 2;
+
+	function drawPoses(personOrPersonPartSegmentation, flipHorizontally, ctx) {
+		if (Array.isArray(personOrPersonPartSegmentation)) {
+			personOrPersonPartSegmentation.forEach(personSegmentation => {
+				let pose = personSegmentation.pose;
+				if (flipHorizontally) {
+					pose = bodyPix.flipPoseHorizontal(pose, personSegmentation.width);
+				}
+				drawKeypoints(pose.keypoints, 0.1, ctx);
+				drawSkeleton(pose.keypoints, 0.1, ctx);
+			});
+		} else {
+			personOrPersonPartSegmentation.allPoses.forEach(pose => {
+				if (flipHorizontally) {
+					pose = bodyPix.flipPoseHorizontal(
+					pose, personOrPersonPartSegmentation.width);
+				}
+				drawKeypoints(pose.keypoints, 0.1, ctx);
+				drawSkeleton(pose.keypoints, 0.1, ctx);
+			})
+		}
+	}
+
+	function drawPoint(ctx, y, x, r, color) {
+		ctx.beginPath();
+		ctx.arc(x, y, r, 0, 2 * Math.PI);
+		ctx.fillStyle = color;
+		ctx.fill();
+	}
+
+	function drawSegment([ay, ax], [by, bx], color, scale, ctx) {
+		ctx.beginPath();
+		ctx.moveTo(ax * scale, ay * scale);
+		ctx.lineTo(bx * scale, by * scale);
+		ctx.lineWidth = LINE_WIDTH;
+		ctx.strokeStyle = color;
+		ctx.stroke();
+	}
+
+	function drawSkeleton(keypoints, minConfidence, ctx, scale = 1) {
+		const adjacentKeyPoints =
+		posenet.getAdjacentKeyPoints(keypoints, minConfidence);
+
+		function toTuple({y, x}) {
+			return [y, x];
+		}
+
+		adjacentKeyPoints.forEach((keypoints) => {
+			drawSegment(
+				toTuple(keypoints[0].position), toTuple(keypoints[1].position), COLOR,
+			scale, ctx);
+		});
+	}
+
+	function drawKeypoints(keypoints, minConfidence, ctx, scale = 1) {
+		for (let i = 0; i < keypoints.length; i++) {
+			const keypoint = keypoints[i];
+
+			if (keypoint.score < minConfidence) {
+				continue;
+			}
+
+			const {y, x} = keypoint.position;
+			drawPoint(ctx, y * scale, x * scale, 3, COLOR);
+		}
+	}
+</script>
+
+</body>
+</html>
